@@ -855,9 +855,9 @@ def build_html_report(result: dict, config_name: str) -> str:
     fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
 
     top_rows = "".join(
-        f"<tr><td>{escape(str(x.get('patron_id','')))}</td><td>{escape(str(x.get('nombre_patron','')))}</td><td>{escape(str(x.get('cd_referencia','')))}</td><td>{escape(str(x.get('similitud_funcional','')))}</td><td>{escape(str(x.get('similitud_cd','')))}</td><td>{escape(str(x.get('similitud_total','')))}</td></tr>"
+        f"<tr><td>{escape(str(x.get('patron_id','')))}</td><td>{escape(str(x.get('nombre_patron','')))}</td><td>{escape(str(x.get('cd_referencia','')))}</td><td>{escape(str(x.get('cd_aplicable_por_rango','')))}</td><td>{escape(str(x.get('validacion_normativa','')))}</td><td>{escape(str(x.get('similitud_funcional','')))}</td><td>{escape(str(x.get('similitud_cd','')))}</td><td>{escape(str(x.get('similitud_total','')))}</td></tr>"
         for x in top[:10]
-    ) or "<tr><td colspan='6'>Sin patrones disponibles</td></tr>"
+    ) or "<tr><td colspan='8'>Sin patrones disponibles</td></tr>"
 
     comp_rows = "".join(
         f"<tr><td>{escape(str(x.get('denominacion_normalizada','')))}</td><td>{escape(str(x.get('cd_vigente','')))}</td><td>{x.get('similitud_total','')}</td><td>{escape(str(x.get('riesgo','')))}</td></tr>"
@@ -917,17 +917,17 @@ th {{ background:#eef1f3; color:rgb(11,16,29); }}
 <h2>3. Resultado técnico</h2>
 <div class="box">
 <p><strong>CD K1 orientativo:</strong> {escape(str(res.get('cd_tecnico_recomendado','')))}</p>
-<p><strong>CD recomendado:</strong> {escape(str(res.get('cd_tecnico_ajustado','')))}</p>
+<p><strong>CD final jurídicamente admisible:</strong> {escape(str(res.get('cd_tecnico_ajustado','')))}</p>
 <p><strong>Diferencial CD:</strong> {escape(str(res.get('diferencial_cd','')))}</p>
 <p><strong>Resultado preliminar:</strong> {escape(str(res.get('resultado_preliminar','')))}</p>
-{('<p><strong>Nota:</strong> El CD K1 orientativo y el CD final no coinciden porque se ha aplicado el rango legal del grupo/subgrupo.</p>' if str(res.get('cd_tecnico_recomendado','')) != str(res.get('cd_tecnico_ajustado','')) else '')}
+{('<p><strong>Nota normativa:</strong> El CD K1 orientativo y el CD final no coinciden porque se ha aplicado el intervalo legal del grupo/subgrupo. El valor K1 se conserva como diagnóstico técnico, pero no como propuesta directa.</p>' if str(res.get('cd_tecnico_recomendado','')) != str(res.get('cd_tecnico_ajustado','')) else '')}
 </div>
 <h2>3 bis. Criterio de recomendación</h2>
 <div class="box">
 <p>El CD técnico recomendado se toma del patrón K1, es decir, del patrón de referencia más próximo por similitud combinada HET-CD. La similitud combinada pondera un 40 % el vector funcional F1-F49 y un 60 % los factores CD ampliados.</p>
 <p><strong>Patrón K1:</strong> {escape(str(top[0].get('patron_id','') if top else ''))} · <strong>CD referencia K1:</strong> {escape(str(top[0].get('cd_referencia','') if top else ''))}</p>
 <p><strong>CD continuo Top-K:</strong> {escape(str(res.get('cd_continuo','')))}. Este valor se conserva solo como indicador auxiliar de tendencia; no sustituye al K1.</p>
-<p>Si el CD del K1 excede el rango normativo del grupo/subgrupo, se informa como contraste legal; no se ajusta automáticamente.</p>
+<p>Si el CD del K1 excede el rango normativo del grupo/subgrupo, se informa como contraste legal y el CD final queda limitado al intervalo aplicable.</p>
 </div>
 <h2>4. Similitudes</h2>
 <div class="box">
@@ -936,7 +936,7 @@ th {{ background:#eef1f3; color:rgb(11,16,29); }}
 <p><strong>Similitud combinada:</strong> {escape(str(sims.get('combinada','')))}</p>
 </div>
 <h2>5. Patrones de referencia más próximos</h2>
-<table><thead><tr><th>Patrón</th><th>Nombre</th><th>CD</th><th>Sim. funcional</th><th>Sim. factores CD</th><th>Sim. total</th></tr></thead><tbody>{top_rows}</tbody></table>
+<table><thead><tr><th>Patrón</th><th>Nombre</th><th>CD K1</th><th>CD aplicable</th><th>Validación normativa</th><th>Sim. funcional</th><th>Sim. factores CD</th><th>Sim. total</th></tr></thead><tbody>{top_rows}</tbody></table>
 <h2>6. Comparables internos y efecto arrastre</h2>
 <div class="box">
 <p><strong>Riesgo de arrastre:</strong> {escape(str(arr.get('riesgo_arrastre','')))}</p>
@@ -1110,7 +1110,7 @@ def render_cd_explanation(result: dict):
         <div class="het-card">
         <p>El motor compara el puesto evaluado con los patrones ampliados de referencia y ordena los resultados por similitud combinada HET-CD.</p>
         <p>Primero identifica el patrón K1, que es el más parecido. En este caso, el K1 es {escape(str(k1.get('patron_id','')))}, con CD de referencia {escape(str(k1_cd))}.</p>
-        <p>Después contrasta el resultado con el rango legal configurado del grupo/subgrupo, solo como control de validez. El grupo/subgrupo no recorta ni modifica la recomendación técnica.</p>
+        <p>Después contrasta el resultado con el rango legal configurado del grupo/subgrupo. Si el K1 excede dicho intervalo, el valor se conserva como diagnóstico técnico bruto, pero la recomendación final queda limitada al CD legalmente admisible.</p>
         <p>Fórmula de similitud total: 40 % verbos funcionales + 60 % factores HET-CD.</p>
         </div>
         """,
@@ -1130,8 +1130,8 @@ def render_cd_explanation(result: dict):
 
     if str(cd_rec) != str(cd_adj):
         render_notice(
-            f"El patrón K1 sitúa el puesto en CD {cd_rec}. El rango legal configurado para el grupo/subgrupo es "
-            f"{val.get('cd_min')} - {val.get('cd_max')}; se informa como control, sin recortar automáticamente la recomendación."
+            f"El patrón K1 sitúa técnicamente el puesto en CD {cd_rec}. El rango legal configurado para el grupo/subgrupo es "
+            f"{val.get('cd_min')} - {val.get('cd_max')}; la recomendación final queda limitada a CD {cd_adj}."
         , "warning")
     else:
         render_notice(f"El CD recomendado por K1 ({cd_rec}) queda dentro del rango legal configurado.", "success")
@@ -1201,7 +1201,7 @@ def render_preliminar_card(code: str, res: dict):
     title, sub = _pretty_resultado_preliminar(code)
     cd_k1 = res.get("cd_tecnico_recomendado", "")
     cd_final = res.get("cd_tecnico_ajustado", "")
-    extra = f"CD K1 orientativo: {cd_k1} · CD recomendado: {cd_final}"
+    extra = f"CD K1 orientativo: {cd_k1} · CD final admisible: {cd_final}"
     st.markdown(
         f"""
         <div class="preliminar-card">
@@ -1226,19 +1226,19 @@ def render_result(result: dict):
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("CD vigente", ident.get("cd_vigente"))
     col2.metric("CD K1 orientativo", res.get("cd_tecnico_recomendado"))
-    col3.metric("CD recomendado", res.get("cd_tecnico_ajustado"))
+    col3.metric("CD final admisible", res.get("cd_tecnico_ajustado"))
     col4.metric("Diferencial", res.get("diferencial_cd"))
 
     if str(res.get("cd_tecnico_recomendado")) != str(res.get("cd_tecnico_ajustado")):
         render_notice(
-            f"El patrón más similar indica CD {res.get('cd_tecnico_recomendado')}. El rango legal se muestra como control de validez, pero no recorta automáticamente la recomendación técnica."
+            f"El patrón más similar indica CD {res.get('cd_tecnico_recomendado')}. El rango legal se aplica como restricción normativa: el CD final queda limitado al intervalo admisible."
         , "warning")
 
     metodo = res.get("metodo_recomendacion", "")
     cd_cont = res.get("cd_continuo", None)
     if metodo:
         st.caption(
-            "Criterio de cálculo: el CD recomendado se toma del patrón K1 activo más similar. El grupo/subgrupo solo se usa para validar rangos legales, no para modificar la recomendación. "
+            "Criterio de cálculo: el CD técnico bruto se toma del patrón K1 activo más similar. El grupo/subgrupo se aplica después como restricción normativa para obtener el CD final jurídicamente admisible. "
             "El CD continuo Top-K se conserva como indicador auxiliar de tendencia o zona límite."
         )
     if cd_cont is not None:
@@ -1254,6 +1254,10 @@ def render_result(result: dict):
     st.markdown("### Validación normativa inicial")
     render_status_pill(val.get("estado", "SIN_ESTADO"))
     st.write(val.get("mensaje", ""))
+    if res.get("ajuste_normativo_aplicado"):
+        render_notice(res.get("nota_rango", "El resultado técnico ha sido limitado por el rango normativo aplicable."), "warning")
+    else:
+        st.caption(res.get("nota_rango", ""))
 
     st.markdown("### Similitudes")
     scol1, scol2, scol3 = st.columns(3)
@@ -1524,7 +1528,7 @@ th {{ background:#eef1f3; color:rgb(11,16,29); }}
 </div>
 <p>Los resultados no constituyen una modificación automática de la RPT. Su finalidad es ordenar técnicamente los casos, identificar incoherencias o familias funcionales que requieran revisión y facilitar la preparación de los informes y expedientes que procedan.</p>
 <h2>3. Distribución por resultado preliminar</h2>
-<p>La siguiente tabla resume la clasificación preliminar obtenida. La categoría “mantener” indica coherencia entre el CD vigente y el CD recomendado; las categorías de revisión identifican puestos que requieren contraste técnico adicional antes de cualquier propuesta formal.</p>
+<p>La siguiente tabla resume la clasificación preliminar obtenida. La categoría “mantener” indica coherencia entre el CD vigente y el CD final jurídicamente admisible; las categorías de revisión identifican puestos que requieren contraste técnico adicional antes de cualquier propuesta formal.</p>
 {table_from_df(resumen_resultados)}
 <h2>4. Resumen por grupo/subgrupo</h2>
 <p>Este resumen permite detectar si las posibles revisiones se concentran en determinados grupos/subgrupos o si responden a familias funcionales concretas. La lectura debe realizarse junto con el detalle técnico de cada puesto.</p>
@@ -1543,7 +1547,7 @@ th {{ background:#eef1f3; color:rgb(11,16,29); }}
 <h2>7. Cautelas metodológicas</h2>
 <ul>
 <li>Solo intervienen en el cálculo los patrones activos y validados mediante la columna <code>activo_calculo</code>.</li>
-<li>El resultado se basa en el patrón K1 activo más similar. El rango legal del grupo/subgrupo se informa como control de validez, sin recortar automáticamente la recomendación.</li>
+<li>El resultado técnico bruto se basa en el patrón K1 activo más similar. El rango legal del grupo/subgrupo se aplica como restricción posterior para obtener el CD final jurídicamente admisible.</li>
 <li>Cuando no existe incremento recomendado de CD, los puestos similares se interpretan como comparables internos de coherencia, no como arrastre activo.</li>
 <li>El efecto arrastre debe entenderse como alerta de coherencia interna y eventual necesidad de revisión agrupada, no como decisión automática.</li>
 <li>Los puestos con revisión manual pendiente deben validarse antes de incorporarse al expediente definitivo.</li>
@@ -2048,7 +2052,7 @@ elif page == "Análisis RPT completo":
                             "grupo_subgrupo": st.column_config.TextColumn("Grupo"),
                             "cd_vigente": st.column_config.NumberColumn("CD vigente"),
                             "cd_k1_orientativo": st.column_config.NumberColumn("CD K1"),
-                            "cd_final_ajustado": st.column_config.NumberColumn("CD recomendado"),
+                            "cd_final_ajustado": st.column_config.NumberColumn("CD final admisible"),
                             "diferencial_cd": st.column_config.NumberColumn("Dif. CD"),
                             "sentido_revision": st.column_config.TextColumn("Sentido"),
                             "resultado_preliminar": st.column_config.TextColumn("Resultado"),
@@ -2059,6 +2063,33 @@ elif page == "Análisis RPT completo":
                             "riesgo_arrastre": st.column_config.TextColumn("Arrastre"),
                         },
                     )
+
+                st.markdown("### Alertas normativas / contraste K1")
+                st.caption(
+                    "Se muestran puestos en los que el patrón técnico K1 queda fuera del rango legal del grupo/subgrupo. "
+                    "No son propuestas directas de subida por encima de la banda, sino hallazgos para revisar diferenciación funcional, adscripción o configuración del puesto."
+                )
+                alert_mask = resumen_df.get("resultado_preliminar", pd.Series(dtype=str)).eq("INCIDENCIA_NORMATIVA")
+                # Captura también casos en los que el K1 y el CD final difieren, aunque por cualquier motivo no estuvieran etiquetados como incidencia.
+                if "cd_k1_orientativo" in resumen_df.columns and "cd_final_ajustado" in resumen_df.columns:
+                    alert_mask = alert_mask | (
+                        pd.to_numeric(resumen_df["cd_k1_orientativo"], errors="coerce")
+                        != pd.to_numeric(resumen_df["cd_final_ajustado"], errors="coerce")
+                    )
+                alertas_df = resumen_df[alert_mask].copy()
+                if alertas_df.empty:
+                    render_notice("No se han detectado contrastes normativos K1 fuera de rango.", "success")
+                else:
+                    alert_cols = [c for c in [
+                        "id_het", "denominacion_normalizada", "grupo_subgrupo", "cd_vigente",
+                        "cd_k1_orientativo", "cd_final_ajustado", "diferencial_cd",
+                        "resultado_preliminar", "recomendacion", "patron_k1", "nombre_patron_k1",
+                        "similitud_total_k1"
+                    ] if c in alertas_df.columns]
+                    display_alertas_df = alertas_df[alert_cols].copy()
+                    if "similitud_total_k1" in display_alertas_df.columns:
+                        display_alertas_df["similitud_total_k1"] = pd.to_numeric(display_alertas_df["similitud_total_k1"], errors="coerce").round(4)
+                    st.dataframe(display_alertas_df, use_container_width=True, hide_index=True)
 
                 st.markdown("### Tabla completa de resultados sistemáticos")
                 view_cols = [c for c in [
@@ -2096,7 +2127,7 @@ elif page == "Análisis RPT completo":
                             "denominacion_normalizada": st.column_config.TextColumn("Puesto tipo", disabled=True, width="large"),
                             "grupo_subgrupo": st.column_config.TextColumn("Grupo", disabled=True),
                             "cd_vigente": st.column_config.NumberColumn("CD vigente", disabled=True),
-                            "cd_final_ajustado": st.column_config.NumberColumn("CD recomendado", disabled=True),
+                            "cd_final_ajustado": st.column_config.NumberColumn("CD final admisible", disabled=True),
                             "diferencial_cd": st.column_config.NumberColumn("Dif. CD", disabled=True),
                             "diferencial_anual_por_dotacion": st.column_config.NumberColumn("Diferencial anual unitario por dotación (€)", disabled=True, format="%.2f"),
                             "dotaciones_afectadas": st.column_config.NumberColumn("✏️ Dotaciones afectadas", min_value=0, step=1, required=True, help="Introduzca aquí el número de dotaciones del puesto tipo afectadas por la revisión."),

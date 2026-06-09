@@ -1159,9 +1159,70 @@ def calcular_similitud_het_cd(
     }
 
 
+DEFAULT_RANGOS_RDL_6_2023: Dict[str, Tuple[int, int]] = {
+    "A1": (24, 30),
+    "A2": (20, 26),
+    "B": (18, 24),
+    "C1": (16, 22),
+    "C2": (14, 18),
+    # AP/E se conserva por compatibilidad con datos históricos; no forma parte
+    # de la nueva tabla principal de subgrupos del RDL 6/2023.
+    "AP": (7, 14),
+    "E": (7, 14),
+}
+
+
+def _normalizar_grupo_subgrupo(grupo_subgrupo: Any) -> str:
+    return str(grupo_subgrupo or "").strip().upper().replace(" ", "")
+
+
+def _rango_por_grupo_desde_tabla(grupo: str, rangos_cd: Any) -> Tuple[Optional[int], Optional[int]]:
+    """Localiza el rango de CD del grupo/subgrupo en la hoja rangos_cd o en el fallback RDL 6/2023.
+
+    Admite grupos barrados como A1/A2. En esos casos se aplica la intersección
+    de intervalos, es decir, el máximo de los mínimos y el mínimo de los máximos,
+    porque el puesto no debe quedar fuera del intervalo de ninguno de los subgrupos
+    desde los que pueda proveerse.
+    """
+    grupo = _normalizar_grupo_subgrupo(grupo)
+    if not grupo:
+        return None, None
+
+    mapa: Dict[str, Tuple[int, int]] = {}
+    rows = iter_rows(rangos_cd)
+    for row in rows:
+        row_grupo = _normalizar_grupo_subgrupo(
+            row_get(row, "grupo_subgrupo", row_get(row, "grupo", row_get(row, "subgrupo", "")))
+        )
+        if not row_grupo:
+            continue
+        cd_min = _to_int(row_get(row, "cd_min", row_get(row, "min", row_get(row, "nivel_min", None))), None)
+        cd_max = _to_int(row_get(row, "cd_max", row_get(row, "max", row_get(row, "nivel_max", None))), None)
+        if cd_min is not None and cd_max is not None:
+            mapa[row_grupo] = (int(cd_min), int(cd_max))
+
+    # Fallback defensivo por si el Excel no trae rangos_cd o viene incompleto.
+    for k, v in DEFAULT_RANGOS_RDL_6_2023.items():
+        mapa.setdefault(k, v)
+
+    if grupo in mapa:
+        return mapa[grupo]
+
+    # Soporte para puestos barrados: A1/A2, C1/C2, etc.
+    if "/" in grupo:
+        partes = [g for g in grupo.split("/") if g]
+        rangos = [mapa[g] for g in partes if g in mapa]
+        if len(rangos) == len(partes) and rangos:
+            cd_min = max(r[0] for r in rangos)
+            cd_max = min(r[1] for r in rangos)
+            if cd_min <= cd_max:
+                return cd_min, cd_max
+    return None, None
+
+
 def validar_rango_cd(grupo_subgrupo: Any, cd_vigente: Any, rangos_cd: Any) -> Dict[str, Any]:
     """Valida el CD vigente contra la tabla de rangos por grupo/subgrupo."""
-    grupo = str(grupo_subgrupo).strip().upper()
+    grupo = _normalizar_grupo_subgrupo(grupo_subgrupo)
     cd = _to_int(cd_vigente, None)
 
     if not grupo:
@@ -1169,23 +1230,14 @@ def validar_rango_cd(grupo_subgrupo: Any, cd_vigente: Any, rangos_cd: Any) -> Di
     if cd is None:
         return {"estado": SIN_RANGO_DEFINIDO, "cd_min": None, "cd_max": None, "mensaje": "CD vigente vacío o no numérico."}
 
-    rows = iter_rows(rangos_cd)
-    for row in rows:
-        row_grupo = str(
-            row_get(row, "grupo_subgrupo", row_get(row, "grupo", row_get(row, "subgrupo", "")))
-        ).strip().upper()
-        if row_grupo == grupo:
-            cd_min = _to_int(row_get(row, "cd_min", row_get(row, "min", row_get(row, "nivel_min", None))), None)
-            cd_max = _to_int(row_get(row, "cd_max", row_get(row, "max", row_get(row, "nivel_max", None))), None)
-            if cd_min is None or cd_max is None:
-                return {"estado": SIN_RANGO_DEFINIDO, "cd_min": cd_min, "cd_max": cd_max, "mensaje": f"Rango incompleto para {grupo}."}
-            if cd < cd_min:
-                return {"estado": FUERA_RANGO_INFERIOR, "cd_min": cd_min, "cd_max": cd_max, "mensaje": f"El CD vigente {cd} está por debajo del mínimo {cd_min} para {grupo}."}
-            if cd > cd_max:
-                return {"estado": FUERA_RANGO_SUPERIOR, "cd_min": cd_min, "cd_max": cd_max, "mensaje": f"El CD vigente {cd} supera el máximo {cd_max} para {grupo}."}
-            return {"estado": RANGO_OK, "cd_min": cd_min, "cd_max": cd_max, "mensaje": f"El CD vigente {cd} se encuentra dentro del rango legal aplicable a {grupo}."}
-
-    return {"estado": SIN_RANGO_DEFINIDO, "cd_min": None, "cd_max": None, "mensaje": f"No existe rango definido para el grupo/subgrupo {grupo}."}
+    cd_min, cd_max = _rango_por_grupo_desde_tabla(grupo, rangos_cd)
+    if cd_min is None or cd_max is None:
+        return {"estado": SIN_RANGO_DEFINIDO, "cd_min": cd_min, "cd_max": cd_max, "mensaje": f"No existe rango definido para el grupo/subgrupo {grupo}."}
+    if cd < cd_min:
+        return {"estado": FUERA_RANGO_INFERIOR, "cd_min": cd_min, "cd_max": cd_max, "mensaje": f"El CD vigente {cd} está por debajo del mínimo {cd_min} para {grupo}."}
+    if cd > cd_max:
+        return {"estado": FUERA_RANGO_SUPERIOR, "cd_min": cd_min, "cd_max": cd_max, "mensaje": f"El CD vigente {cd} supera el máximo {cd_max} para {grupo}."}
+    return {"estado": RANGO_OK, "cd_min": cd_min, "cd_max": cd_max, "mensaje": f"El CD vigente {cd} se encuentra dentro del rango legal aplicable a {grupo}."}
 
 
 def ajustar_cd_a_rango(cd_recomendado: Any, validacion_rango: Dict[str, Any]) -> Optional[int]:
@@ -1533,18 +1585,23 @@ def classify_het_cd(
             recomendacion["cd_top1"] = cd_k1
             recomendacion["metodo"] = "TOP1_PATRON_MAS_PROXIMO_CORREGIDO"
             advertencias.append("Se ha corregido internamente el CD orientativo para hacerlo coincidir con el patrón K1 más similar.")
-    # Criterio v1.0.3:
-    # El grupo/subgrupo NO interpreta ni corrige la recomendación técnica.
-    # Solo sirve para validar rangos legales. La recomendación se toma del patrón K1
-    # activo más similar. Si el CD recomendado excede el rango legal configurado,
-    # se informa como advertencia, pero no se recorta automáticamente.
-    cd_ajustado = cd_recomendado
+    # Criterio v1.0.4:
+    # El patrón K1 mantiene el valor técnico bruto de referencia. A continuación,
+    # se aplica una capa de seguridad jurídica: si el CD K1 excede el intervalo
+    # del grupo/subgrupo, el CD final queda limitado al máximo/mínimo legal
+    # disponible y se emite alerta expresa.
     cd_recomendado_rango = ajustar_cd_a_rango(cd_recomendado, validacion)
-    if cd_recomendado is not None and cd_recomendado_rango is not None and int(cd_recomendado) != int(cd_recomendado_rango):
+    ajuste_normativo_aplicado = (
+        cd_recomendado is not None
+        and cd_recomendado_rango is not None
+        and int(cd_recomendado) != int(cd_recomendado_rango)
+    )
+    cd_ajustado = cd_recomendado_rango if ajuste_normativo_aplicado else cd_recomendado
+    if ajuste_normativo_aplicado:
         advertencias.append(
-            f"El CD recomendado por K1 ({cd_recomendado}) queda fuera del rango legal configurado "
+            f"El CD técnico bruto por K1 ({cd_recomendado}) queda fuera del rango legal configurado "
             f"para {grupo} ({validacion.get('cd_min')} - {validacion.get('cd_max')}). "
-            "El motor no lo ajusta: lo informa para revisión jurídica/técnica."
+            f"La recomendación final se limita a CD {cd_ajustado}."
         )
     diferencial_cd = None
     if cd_ajustado is not None and cd_vigente is not None:
@@ -1586,6 +1643,12 @@ def classify_het_cd(
         efecto_arrastre = calcular_efecto_arrastre(comparables, cd_ajustado)
 
     resultado_preliminar = determinar_resultado_preliminar(validacion, diferencial_cd, efecto_arrastre)
+    # Si el patrón K1 técnicamente más próximo queda fuera del rango legal del grupo/subgrupo,
+    # no debe desaparecer como un simple "mantener" aunque el CD final ajustado coincida
+    # con el CD vigente. Se clasifica como incidencia normativa para que aflore en el
+    # análisis masivo y en los informes como hallazgo técnico-jurídico.
+    if ajuste_normativo_aplicado:
+        resultado_preliminar = "INCIDENCIA_NORMATIVA"
 
     factores_dominantes = extraer_factores_dominantes(puesto_row, top_n=3)
     motivos = []
@@ -1598,6 +1661,21 @@ def classify_het_cd(
         motivos.append("Factores dominantes detectados: " + ", ".join(factores_dominantes) + ".")
     if diferencial_cd is not None:
         motivos.append(f"El diferencial entre CD técnico ajustado y CD vigente es {diferencial_cd}.")
+
+    # Decoración normativa del Top-K para que la interfaz muestre qué patrones
+    # son compatibles con el grupo/subgrupo evaluado y cuáles solo sirven como
+    # referencia técnica no aplicable directamente.
+    cd_min_val = validacion.get("cd_min")
+    cd_max_val = validacion.get("cd_max")
+    for patron in top_k_patrones:
+        cd_ref = _to_int(patron.get("cd_referencia"), None)
+        if cd_ref is None or cd_min_val is None or cd_max_val is None:
+            patron["validacion_normativa"] = "SIN_RANGO"
+            patron["cd_aplicable_por_rango"] = cd_ref
+        else:
+            cd_ref_aj = max(int(cd_min_val), min(int(cd_ref), int(cd_max_val)))
+            patron["cd_aplicable_por_rango"] = cd_ref_aj
+            patron["validacion_normativa"] = "COMPATIBLE" if cd_ref_aj == cd_ref else "NO_APLICABLE_DIRECTAMENTE"
 
     vector_entrada = {col: row_get(puesto_row, col, None) for col in (F_COLUMNS + CD_COLUMNS)}
 
@@ -1623,9 +1701,10 @@ def classify_het_cd(
             "patron_top1": recomendacion.get("patron_top1"),
             "similitud_top1": recomendacion.get("similitud_top1"),
             "cd_recomendado_ajustado_a_rango_legal": cd_recomendado_rango,
+            "ajuste_normativo_aplicado": ajuste_normativo_aplicado,
             "nota_rango": (
-                "El CD recomendado por K1 queda fuera del rango legal configurado; se informa sin ajustar automáticamente."
-                if cd_recomendado is not None and cd_recomendado_rango is not None and int(cd_recomendado) != int(cd_recomendado_rango)
+                f"El CD técnico bruto por K1 queda fuera del rango legal configurado; la recomendación final se limita a CD {cd_ajustado}."
+                if ajuste_normativo_aplicado
                 else "El CD recomendado por K1 se mantiene dentro del rango legal configurado."
             ),
         },
@@ -1771,7 +1850,15 @@ def generar_texto_recomendacion(result: Dict[str, Any]) -> Dict[str, str]:
     titulo = "Sin datos suficientes"
     texto = "No se dispone de datos suficientes para formular una recomendación técnica conclusiva."
 
-    if estado != RANGO_OK:
+    if str(cd_k1) != str(cd_final):
+        titulo = "Contraste normativo K1"
+        texto = (
+            f"El patrón técnico K1 apunta a CD {cd_k1}, pero dicho nivel excede el intervalo legal configurado "
+            f"para el grupo/subgrupo del puesto ({val.get('cd_min')} - {val.get('cd_max')}). "
+            f"Por ello, no se formula una propuesta directa a CD {cd_k1}; el CD final jurídicamente admisible queda limitado a CD {cd_final}. "
+            "Este resultado debe tratarse como alerta de configuración funcional, diferenciación del puesto o revisión de adscripción, no como mantenimiento simple."
+        )
+    elif estado != RANGO_OK:
         titulo = "Incidencia normativa previa"
         texto = (
             "Antes de valorar una modificación técnica del CD debe revisarse la incidencia detectada en el rango legal "
@@ -1797,10 +1884,10 @@ def generar_texto_recomendacion(result: Dict[str, Any]) -> Dict[str, str]:
             "sino revisar la coherencia interna del puesto, su configuración funcional y su comparación con puestos análogos."
         )
 
-    if str(cd_k1) != str(cd_final):
+    if str(cd_k1) != str(cd_final) and titulo != "Contraste normativo K1":
         texto += (
             f" El patrón K1 apunta a CD {cd_k1}; el rango legal configurado para el grupo/subgrupo es "
-            f"{val.get('cd_min')} - {val.get('cd_max')}. Este dato se informa como control de legalidad, sin recortar automáticamente la recomendación técnica."
+            f"{val.get('cd_min')} - {val.get('cd_max')}. Por ello, el valor K1 se conserva como diagnóstico técnico bruto y la recomendación final se limita al intervalo legal aplicable."
         )
 
     if riesgo in {"MUY_ALTO", "ALTO"} and dif_i is not None and dif_i > 0:
