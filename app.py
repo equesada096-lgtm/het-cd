@@ -15,6 +15,8 @@ from het_cd_engine import (
     CD_COLUMNS,
     CD_SUBFACTOR_COLUMNS,
     CD_FACTOR_PREFIXES,
+    DEFAULT_BLOCK_WEIGHTS,
+    normalizar_block_weights,
     classify_het_cd,
     validar_dimensiones_vectoriales,
     validar_rango_cd,
@@ -844,6 +846,10 @@ def build_html_report(result: dict, config_name: str) -> str:
     val = result.get("validacion_rango", {})
     res = result.get("resultado_cd", {})
     sims = result.get("similitudes", {})
+    params = result.get("parametros_modelo", {}) or {}
+    peso_f = float(params.get("peso_funcional", DEFAULT_BLOCK_WEIGHTS.get("funcional", 0.40)) or 0.0)
+    peso_cd = float(params.get("peso_factores_cd", DEFAULT_BLOCK_WEIGHTS.get("cd", 0.60)) or 0.0)
+    formula_txt = params.get("formula_similitud_total") or f"{peso_f:.2f} × similitud funcional + {peso_cd:.2f} × similitud factores CD"
     arr = result.get("efecto_arrastre", {})
     exp = result.get("explicacion", {})
     top = result.get("top_k_patrones", [])
@@ -924,7 +930,7 @@ th {{ background:#eef1f3; color:rgb(11,16,29); }}
 </div>
 <h2>3 bis. Criterio de recomendación</h2>
 <div class="box">
-<p>El CD técnico recomendado se toma del patrón K1, es decir, del patrón de referencia más próximo por similitud combinada HET-CD. La similitud combinada pondera un 40 % el vector funcional F1-F49 y un 60 % los factores CD ampliados.</p>
+<p>El CD técnico recomendado se toma del patrón K1, es decir, del patrón de referencia más próximo por similitud combinada HET-CD. La fórmula de similitud combinada aplicada en este cálculo es: {escape(str(formula_txt))}.</p>
 <p><strong>Patrón K1:</strong> {escape(str(top[0].get('patron_id','') if top else ''))} · <strong>CD referencia K1:</strong> {escape(str(top[0].get('cd_referencia','') if top else ''))}</p>
 <p><strong>CD continuo Top-K:</strong> {escape(str(res.get('cd_continuo','')))}. Este valor se conserva solo como indicador auxiliar de tendencia; no sustituye al K1.</p>
 <p>Si el CD del K1 excede el rango normativo del grupo/subgrupo, se informa como contraste legal y el CD final queda limitado al intervalo aplicable.</p>
@@ -1091,6 +1097,10 @@ def render_cd_explanation(result: dict):
     sims = result.get("similitudes", {}) or {}
     res = result.get("resultado_cd", {}) or {}
     val = result.get("validacion_rango", {}) or {}
+    params = result.get("parametros_modelo", {}) or {}
+    peso_f = float(params.get("peso_funcional", DEFAULT_BLOCK_WEIGHTS.get("funcional", 0.40)) or 0.0)
+    peso_cd = float(params.get("peso_factores_cd", DEFAULT_BLOCK_WEIGHTS.get("cd", 0.60)) or 0.0)
+    formula_txt = params.get("formula_similitud_total") or f"{peso_f:.2f} × similitud funcional + {peso_cd:.2f} × similitud factores CD"
     if not top:
         render_notice("No hay patrones de referencia suficientes para explicar la recomendación.", "warning")
         return
@@ -1111,7 +1121,7 @@ def render_cd_explanation(result: dict):
         <p>El motor compara el puesto evaluado con los patrones ampliados de referencia y ordena los resultados por similitud combinada HET-CD.</p>
         <p>Primero identifica el patrón K1, que es el más parecido. En este caso, el K1 es {escape(str(k1.get('patron_id','')))}, con CD de referencia {escape(str(k1_cd))}.</p>
         <p>Después contrasta el resultado con el rango legal configurado del grupo/subgrupo. Si el K1 excede dicho intervalo, el valor se conserva como diagnóstico técnico bruto, pero la recomendación final queda limitada al CD legalmente admisible.</p>
-        <p>Fórmula de similitud total: 40 % verbos funcionales + 60 % factores HET-CD.</p>
+        <p>Fórmula de similitud total: {escape(str(formula_txt))}.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1119,7 +1129,7 @@ def render_cd_explanation(result: dict):
     c1, c2, c3 = st.columns(3)
     c1.metric("Similitud funcional K1", _fmt_score(sim_f), help="Coincidencia en el vector F1-F49 de verbos funcionales.")
     c2.metric("Similitud factores CD K1", _fmt_score(sim_cd), help="Coincidencia en CD1-CD6: especialización, responsabilidad, competencia, mando y complejidad.")
-    c3.metric("Similitud combinada K1", _fmt_score(sim_total), help="0,40 × funcional + 0,60 × factores CD.")
+    c3.metric("Similitud combinada K1", _fmt_score(sim_total), help=formula_txt)
     st.caption(f"Lectura del coeficiente total: {_interpret_score(sim_total)}. Un valor próximo a 1 indica mucha proximidad al patrón; un valor bajo exige cautela o revisión de la vectorización.")
 
     if cd_cont is not None:
@@ -1666,6 +1676,27 @@ def _render_active_config_card() -> None:
         unsafe_allow_html=True,
     )
 
+def render_model_weight_selector() -> dict:
+    """Selector global de ponderación entre subespacios HET-CD."""
+    default_weights = normalizar_block_weights(DEFAULT_BLOCK_WEIGHTS)
+    default_alpha = float(default_weights.get("funcional", 0.40))
+    with st.sidebar.expander("Parámetros técnicos del modelo", expanded=False):
+        st.caption("Análisis de sensibilidad: modifica la influencia relativa de verbos funcionales y factores CD.")
+        alpha = st.slider(
+            "Peso verbos funcionales",
+            min_value=0.30,
+            max_value=0.70,
+            value=float(st.session_state.get("peso_funcional_modelo", default_alpha)),
+            step=0.05,
+            help="Alfa. Beta se calcula automáticamente como 1 - alfa. Rango limitado para evitar desnaturalizar el modelo.",
+            key="peso_funcional_modelo_slider",
+        )
+        st.session_state["peso_funcional_modelo"] = float(alpha)
+        beta = 1.0 - float(alpha)
+        st.caption(f"Ponderación activa: verbos {alpha:.2f} · factores CD {beta:.2f}")
+        st.caption("Uso recomendado: contraste técnico y análisis de sensibilidad, no ajuste discrecional de resultados individuales.")
+    return {"funcional": float(alpha), "cd": float(beta)}
+
 try:
     if uploaded_file:
         _load_config_from_bytes(file_to_bytes(uploaded_file), uploaded_file.name)
@@ -1677,6 +1708,8 @@ except Exception as e:
     st.sidebar.error(f"Error al cargar configuración: {e}")
     if modo_tecnico:
         st.exception(e)
+
+block_weights_ui = render_model_weight_selector()
 
 page = st.sidebar.radio(
     "Módulo",
@@ -1827,6 +1860,7 @@ elif page == "Configurador funcional":
                 rangos_cd=rangos,
                 topk=5,
                 calcular_arrastre=not puestos.empty,
+                block_weights=block_weights_ui,
             )
             result = attach_traceability(result, puesto_row, verbs, selected_ids, dic, get_criteria_df(sheets))
             st.session_state.last_result = result
@@ -1864,6 +1898,7 @@ elif page == "Evaluador HET-CD":
                             rangos_cd=rangos,
                             topk=5,
                             calcular_arrastre=False,
+                            block_weights=block_weights_ui,
                         )
                         selected_ids = st.session_state.get("last_configured_selected_ids", [])
                         result = attach_traceability(result, caso, get_verbs_dictionary(sheets), selected_ids, dic, get_criteria_df(sheets))
@@ -1915,6 +1950,7 @@ elif page == "Evaluador HET-CD":
                     rangos_cd=rangos,
                     topk=5,
                     calcular_arrastre=True,
+                    block_weights=block_weights_ui,
                 )
                 selected_ids = [c for c in F_COLUMNS if int(float(puesto_row.get(c, 0) or 0)) == 1]
                 result = attach_traceability(result, puesto_row, get_verbs_dictionary(sheets), selected_ids, dic, get_criteria_df(sheets))
@@ -1961,6 +1997,7 @@ elif page == "Análisis RPT completo":
             topk_batch = c1.number_input("Top-K patrones/comparables", min_value=3, max_value=20, value=5, step=1)
             meses_batch = c2.number_input("Meses de efecto económico", min_value=1, max_value=12, value=12, step=1)
             anio_batch = c3.number_input("Año importes CD", min_value=2024, max_value=2030, value=2026, step=1)
+            st.caption(f"Ponderación activa del cálculo: verbos funcionales {block_weights_ui['funcional']:.2f} · factores CD {block_weights_ui['cd']:.2f}")
 
         if st.button("▶️ Ejecutar análisis sistemático RPT", use_container_width=True):
             try:
@@ -1974,6 +2011,7 @@ elif page == "Análisis RPT completo":
                         topk=int(topk_batch),
                         meses=int(meses_batch),
                         anio=int(anio_batch),
+                        block_weights=block_weights_ui,
                     )
                 analysis["_config_hash"] = st.session_state.get("config_hash")
                 analysis["_config_name"] = st.session_state.get("config_name")

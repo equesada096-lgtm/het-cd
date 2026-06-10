@@ -845,6 +845,23 @@ DEFAULT_BLOCK_WEIGHTS: Dict[str, float] = {
     "cd": 0.60,
 }
 
+
+def normalizar_block_weights(block_weights: Optional[Dict[str, float]] = None) -> Dict[str, float]:
+    """Normaliza los pesos globales de subespacios funcional/CD para que sumen 1.
+
+    Se usa para permitir que la capa de interfaz modifique alfa y beta sin
+    tocar código, manteniendo siempre una combinación convexa trazable.
+    """
+    base = block_weights or DEFAULT_BLOCK_WEIGHTS
+    funcional = _to_float(base.get("funcional", DEFAULT_BLOCK_WEIGHTS["funcional"]), DEFAULT_BLOCK_WEIGHTS["funcional"])
+    cd = _to_float(base.get("cd", DEFAULT_BLOCK_WEIGHTS["cd"]), DEFAULT_BLOCK_WEIGHTS["cd"])
+    funcional = max(0.0, min(1.0, float(funcional or 0.0)))
+    cd = max(0.0, min(1.0, float(cd or 0.0)))
+    total = funcional + cd
+    if total <= 0:
+        return dict(DEFAULT_BLOCK_WEIGHTS)
+    return {"funcional": funcional / total, "cd": cd / total}
+
 DEFAULT_CD_FACTOR_WEIGHTS: Dict[str, float] = {
     "CD1": 0.15,
     "CD2": 0.25,
@@ -1140,7 +1157,7 @@ def calcular_similitud_het_cd(
     cd_subfactor_weights: Optional[Dict[str, Dict[str, float]]] = None,
 ) -> Dict[str, float]:
     """Calcula similitud funcional, similitud CD y similitud total HET-CD."""
-    block_weights = block_weights or DEFAULT_BLOCK_WEIGHTS
+    block_weights = normalizar_block_weights(block_weights)
     sim_func = calcular_similitud_funcional_vector(puesto_row, patron_row)
     sim_cd = calcular_similitud_factores_cd(
         puesto_row,
@@ -1513,6 +1530,7 @@ def classify_het_cd(
     diccionario_columnas: Any = None,
     topk: int = 5,
     calcular_arrastre: bool = True,
+    block_weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     """
     Clasifica/evalúa un puesto tipo con el modelo HET-CD.
@@ -1537,7 +1555,7 @@ def classify_het_cd(
     # En esta primera versión, los pesos se mantienen por defecto. La lectura fina
     # desde pesos_modelo se incorporará en la capa de carga de app.py o en una
     # función parse_pesos_modelo() posterior.
-    block_weights = DEFAULT_BLOCK_WEIGHTS
+    block_weights = normalizar_block_weights(block_weights)
     cd_factor_weights = DEFAULT_CD_FACTOR_WEIGHTS
     cd_subfactor_weights = DEFAULT_CD_SUBFACTOR_WEIGHTS
 
@@ -1689,6 +1707,14 @@ def classify_het_cd(
         "vector_entrada": vector_entrada,
         "validacion_rango": validacion,
         "dimension_check": dimension_check,
+        "parametros_modelo": {
+            "peso_funcional": round(float(block_weights.get("funcional", 0.0)), 4),
+            "peso_factores_cd": round(float(block_weights.get("cd", 0.0)), 4),
+            "formula_similitud_total": (
+                f"{float(block_weights.get('funcional', 0.0)):.2f} × similitud funcional + "
+                f"{float(block_weights.get('cd', 0.0)):.2f} × similitud factores CD"
+            ),
+        },
         "similitudes": similitudes,
         "top_k_patrones": top_k_patrones,
         "resultado_cd": {
@@ -1945,6 +1971,7 @@ def analizar_rpt_completa(
     topk: int = 5,
     meses: int = 12,
     anio: int = 2026,
+    block_weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
     """Ejecuta evaluación HET-CD sobre todos los puestos de puestos_vector."""
     resultados: List[Dict[str, Any]] = []
@@ -1959,6 +1986,7 @@ def analizar_rpt_completa(
             pesos_modelo=pesos_modelo,
             topk=topk,
             calcular_arrastre=True,
+            block_weights=block_weights,
         )
         ident = result.get("identificacion", {}) or {}
         res = result.get("resultado_cd", {}) or {}
@@ -1997,5 +2025,7 @@ def analizar_rpt_completa(
             "impacto_periodo_total": total_impacto_periodo,
             "anio_importes": anio,
             "meses": meses,
+            "peso_funcional": round(float(normalizar_block_weights(block_weights).get("funcional", 0.0)), 4),
+            "peso_factores_cd": round(float(normalizar_block_weights(block_weights).get("cd", 0.0)), 4),
         },
     }
