@@ -201,6 +201,61 @@ def inject_css():
         .trace-table th { background: #eef1f3; color: rgb(11,16,29); }
 
 
+        /* Notas y comentarios: contraste homogéneo con la app */
+        .het-sidebar-note {
+            background: rgba(0, 96, 137, 0.42) !important;
+            border: 1px solid rgba(216, 239, 255, 0.30) !important;
+            border-radius: 10px !important;
+            padding: 0.70rem 0.80rem !important;
+            margin: 0.35rem 0 0.70rem 0 !important;
+            color: #ffffff !important;
+            line-height: 1.35 !important;
+            font-size: 0.90rem !important;
+        }
+        .het-sidebar-note *, .het-sidebar-note strong {
+            color: #ffffff !important;
+        }
+        .het-sidebar-note.light {
+            background: #c7d0d8 !important;
+            border: 1px solid #8998a4 !important;
+            color: #0b101d !important;
+        }
+        .het-sidebar-note.light *, .het-sidebar-note.light strong {
+            color: #0b101d !important;
+        }
+        .het-weight-readout {
+            background: #006089 !important;
+            border: 1px solid #006089 !important;
+            border-radius: 10px !important;
+            padding: 0.65rem 0.80rem !important;
+            margin: 0.65rem 0 !important;
+            color: #ffffff !important;
+            font-size: 0.92rem !important;
+            line-height: 1.45 !important;
+        }
+        .het-weight-readout *, .het-weight-readout strong {
+            color: #ffffff !important;
+        }
+        section[data-testid="stSidebar"] div[data-testid="stCaptionContainer"],
+        section[data-testid="stSidebar"] div[data-testid="stCaptionContainer"] * {
+            color: #ffffff !important;
+            opacity: 1 !important;
+        }
+        .main div[data-testid="stCaptionContainer"],
+        .main div[data-testid="stCaptionContainer"] * {
+            color: #0b101d !important;
+            opacity: 1 !important;
+        }
+        section[data-testid="stSidebar"] .stSlider label,
+        section[data-testid="stSidebar"] .stSlider label *,
+        section[data-testid="stSidebar"] [data-testid="stSlider"] label,
+        section[data-testid="stSidebar"] [data-testid="stSlider"] label * {
+            color: #ffffff !important;
+            opacity: 1 !important;
+            font-weight: 600 !important;
+        }
+
+
 
         /* Expander: cuerpo claro y cabecera oscura. Evita texto oscuro sobre fondo oscuro. */
         div[data-testid="stExpander"] {
@@ -1677,24 +1732,56 @@ def _render_active_config_card() -> None:
     )
 
 def render_model_weight_selector() -> dict:
-    """Selector global de ponderación entre subespacios HET-CD."""
+    """Selector global de ponderación entre subespacios HET-CD.
+
+    La posición del deslizador expresa el desplazamiento desde el polo alfa
+    —verbos de acción— hacia el polo beta —factores técnicos de CD—:
+        0.0 = 100 % alfa / 0 % beta
+        0.5 = 50 % alfa / 50 % beta
+        1.0 = 0 % alfa / 100 % beta
+    """
     default_weights = normalizar_block_weights(DEFAULT_BLOCK_WEIGHTS)
-    default_alpha = float(default_weights.get("funcional", 0.40))
+    default_beta = float(default_weights.get("cd", 0.60))
+    default_beta = round(default_beta, 1)
+
     with st.sidebar.expander("Parámetros técnicos del modelo", expanded=False):
-        st.caption("Análisis de sensibilidad: modifica la influencia relativa de verbos funcionales y factores CD.")
-        alpha = st.slider(
-            "Peso verbos funcionales",
-            min_value=0.30,
-            max_value=0.70,
-            value=float(st.session_state.get("peso_funcional_modelo", default_alpha)),
-            step=0.05,
-            help="Alfa. Beta se calcula automáticamente como 1 - alfa. Rango limitado para evitar desnaturalizar el modelo.",
-            key="peso_funcional_modelo_slider",
+        st.markdown(
+            """
+            <div class="het-sidebar-note">
+                <strong>Análisis de sensibilidad</strong><br>
+                El deslizador desplaza el peso desde <strong>α · verbos de acción</strong>
+                hacia <strong>β · factores técnicos de CD</strong>.
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-        st.session_state["peso_funcional_modelo"] = float(alpha)
-        beta = 1.0 - float(alpha)
-        st.caption(f"Ponderación activa: verbos {alpha:.2f} · factores CD {beta:.2f}")
-        st.caption("Uso recomendado: contraste técnico y análisis de sensibilidad, no ajuste discrecional de resultados individuales.")
+
+        beta = st.slider(
+            "Equilibrio α verbos ↔ β factores CD",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(st.session_state.get("peso_beta_modelo", default_beta)),
+            step=0.1,
+            help="0 = todo el peso para α/verbos de acción; 1 = todo el peso para β/factores técnicos CD. El punto medio 0,5 equivale a α=0,5 y β=0,5.",
+            key="peso_beta_modelo_slider",
+        )
+        beta = round(float(beta), 1)
+        alpha = round(1.0 - beta, 1)
+        st.session_state["peso_beta_modelo"] = beta
+        st.session_state["peso_funcional_modelo"] = alpha
+
+        st.markdown(
+            f"""
+            <div class="het-weight-readout">
+                <div><strong>α · Verbos de acción:</strong> {alpha:.1f}</div>
+                <div><strong>β · Factores técnicos CD:</strong> {beta:.1f}</div>
+            </div>
+            <div class="het-sidebar-note light">
+                Uso recomendado: contraste técnico y análisis de sensibilidad, no ajuste discrecional de resultados individuales.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     return {"funcional": float(alpha), "cd": float(beta)}
 
 try:
