@@ -1807,14 +1807,14 @@ def calcular_impacto_cd(
     cd_vigente: Any,
     cd_destino: Any,
     importes_cd: Any,
-    dotaciones: Any = 1,
+    dotaciones: Any = 0,
     meses: Any = 12,
     anio: int = 2026,
 ) -> Dict[str, Any]:
     """Calcula el impacto económico del cambio de CD usando importes anuales oficiales."""
     cd_v = _to_int(cd_vigente, None)
     cd_d = _to_int(cd_destino, None)
-    dots = _to_float(dotaciones, 1.0) or 0.0
+    dots = _to_float(dotaciones, 0.0) or 0.0
     meses_num = _to_float(meses, 12.0) or 12.0
     grupo = str(grupo_subgrupo or "").strip().upper()
 
@@ -1986,7 +1986,7 @@ def analizar_rpt_completa(
         )
         ident = result.get("identificacion", {}) or {}
         res = result.get("resultado_cd", {}) or {}
-        dotaciones = _lookup_cd_value(row, ["dotaciones", "DOTACIONES", "num_dotaciones", "n_dotaciones"], 1)
+        dotaciones = _lookup_cd_value(row, ["dotaciones", "DOTACIONES", "num_dotaciones", "n_dotaciones"], 0)
         impacto = calcular_impacto_cd(
             ident.get("grupo_subgrupo"),
             ident.get("cd_vigente"),
