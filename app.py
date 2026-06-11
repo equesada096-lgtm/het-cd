@@ -905,11 +905,10 @@ def build_html_report(result: dict, config_name: str) -> str:
     peso_f = float(params.get("peso_funcional", DEFAULT_BLOCK_WEIGHTS.get("funcional", 0.40)) or 0.0)
     peso_cd = float(params.get("peso_factores_cd", DEFAULT_BLOCK_WEIGHTS.get("cd", 0.60)) or 0.0)
     formula_txt = params.get("formula_similitud_total") or f"{peso_f:.2f} × similitud funcional + {peso_cd:.2f} × similitud factores CD"
-    arr = result.get("efecto_arrastre", {})
     exp = result.get("explicacion", {})
     top = result.get("top_k_patrones", [])
     comp = result.get("comparables_internos", [])
-    impacto = result.get("impacto_economico_estimado", {}) or {}
+    impacto = result.get("impacto_economico_estimado", {}) or result.get("impacto_economico_auto", {}) or {}
 
     logo_b64 = get_logo_base64()
     logo_html = f"<img src='data:image/png;base64,{logo_b64}' class='logo'/>" if logo_b64 else "<strong>Ayuntamiento de Elche</strong>"
@@ -921,13 +920,76 @@ def build_html_report(result: dict, config_name: str) -> str:
     ) or "<tr><td colspan='8'>Sin patrones disponibles</td></tr>"
 
     comp_rows = "".join(
-        f"<tr><td>{escape(str(x.get('denominacion_normalizada','')))}</td><td>{escape(str(x.get('cd_vigente','')))}</td><td>{x.get('similitud_total','')}</td><td>{escape(str(x.get('riesgo','')))}</td></tr>"
+        f"<tr><td>{escape(str(x.get('denominacion_normalizada','')))}</td><td>{escape(str(x.get('cd_vigente','')))}</td><td>{x.get('similitud_total','')}</td></tr>"
         for x in comp[:10]
-    ) or "<tr><td colspan='4'>Sin comparables internos calculados</td></tr>"
+    ) or "<tr><td colspan='3'>Sin comparables internos calculados</td></tr>"
 
     traz = result.get("trazabilidad", {})
     verb_trace = html_trace_rows(traz.get("verbos_funcionales", []), ["verbo_id", "verbo", "grupo_verbo", "categoria", "definicion"])
     factor_trace = html_trace_rows(traz.get("factores_cd", []), ["codigo", "criterio", "valor", "valor_numerico", "criterio_valor", "ejemplo"])
+
+    def _safe_num_report(v):
+        try:
+            if v is None or pd.isna(v):
+                return 0.0
+            return float(v)
+        except Exception:
+            return 0.0
+
+    def _ajuste_legal_report():
+        try:
+            cd_k1 = res.get("cd_tecnico_recomendado")
+            cd_final = res.get("cd_tecnico_ajustado")
+            return pd.notna(cd_k1) and pd.notna(cd_final) and int(round(float(cd_k1))) != int(round(float(cd_final)))
+        except Exception:
+            return False
+
+    def _motivo_individual():
+        dif = _safe_num_report(res.get("diferencial_cd"))
+        resultado = str(res.get("resultado_preliminar", ""))
+        if resultado == "INCIDENCIA_NORMATIVA" or _ajuste_legal_report():
+            return "Nivel técnico superior no aplicable por límite legal" if _safe_num_report(res.get("cd_tecnico_recomendado")) > _safe_num_report(res.get("cd_tecnico_ajustado")) else "Incidencia normativa en el rango de CD"
+        if dif > 0:
+            return "Nivel técnico superior al CD actual"
+        if dif < 0:
+            return "Nivel técnico inferior al CD actual"
+        return "Coincidencia entre CD actual y CD técnico resultante"
+
+    def _conclusion_individual():
+        dif = _safe_num_report(res.get("diferencial_cd"))
+        resultado = str(res.get("resultado_preliminar", ""))
+        if resultado == "INCIDENCIA_NORMATIVA" or _ajuste_legal_report():
+            return "No procede proponer la elevación del nivel de complemento de destino por superar el intervalo legal aplicable al subgrupo de clasificación."
+        if dif > 0:
+            return "Procede proponer la adecuación del puesto al nivel de complemento de destino resultante del análisis técnico."
+        if dif < 0:
+            return "No procede propuesta de incremento; el análisis técnico apunta a un nivel funcional inferior al actualmente asignado."
+        return "No procede actuación prioritaria sobre el nivel de complemento de destino."
+
+    motivo_tecnico = _motivo_individual()
+    conclusion_tecnica = _conclusion_individual()
+
+    def _fmt_eur(v):
+        try:
+            if v is None or pd.isna(v):
+                return ""
+            return f"{float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        except Exception:
+            return escape(str(v or ""))
+
+    impacto_section = ""
+    try:
+        dif_eur = float(impacto.get("diferencial_anual_por_dotacion"))
+    except Exception:
+        dif_eur = 0.0
+    if dif_eur > 0 and impacto.get("impacto_anual_total") is not None:
+        impacto_section = f"""
+<h2>Estimación económica</h2>
+<p>La estimación económica se refiere a las dotaciones efectivamente incluidas para el puesto tipo, con independencia de que dichas dotaciones se encuentren ocupadas o vacantes en el momento del análisis.</p>
+<table><thead><tr><th>Diferencial anual por dotación</th><th>Dotaciones</th><th>Impacto anual total</th><th>Impacto periodo</th></tr></thead><tbody>
+<tr><td>{_fmt_eur(impacto.get('diferencial_anual_por_dotacion'))} €</td><td>{escape(str(impacto.get('dotaciones', '')))}</td><td>{_fmt_eur(impacto.get('impacto_anual_total'))} €</td><td>{_fmt_eur(impacto.get('impacto_periodo'))} €</td></tr>
+</tbody></table>
+"""
 
     return f"""
 <!DOCTYPE html>
@@ -980,40 +1042,36 @@ th {{ background:#eef1f3; color:rgb(11,16,29); }}
 <p><strong>CD K1 orientativo:</strong> {escape(str(res.get('cd_tecnico_recomendado','')))}</p>
 <p><strong>CD final jurídicamente admisible:</strong> {escape(str(res.get('cd_tecnico_ajustado','')))}</p>
 <p><strong>Diferencial CD:</strong> {escape(str(res.get('diferencial_cd','')))}</p>
-<p><strong>Resultado preliminar:</strong> {escape(str(res.get('resultado_preliminar','')))}</p>
+<p><strong>Motivo técnico:</strong> {escape(str(motivo_tecnico))}</p>
+<p><strong>Conclusión técnica:</strong> {escape(str(conclusion_tecnica))}</p>
 {('<p><strong>Nota normativa:</strong> El CD K1 orientativo y el CD final no coinciden porque se ha aplicado el intervalo legal del grupo/subgrupo. El valor K1 se conserva como diagnóstico técnico, pero no como propuesta directa.</p>' if str(res.get('cd_tecnico_recomendado','')) != str(res.get('cd_tecnico_ajustado','')) else '')}
 </div>
-<h2>3 bis. Criterio de recomendación</h2>
+<h2>4. Criterio de recomendación</h2>
 <div class="box">
 <p>El CD técnico recomendado se toma del patrón K1, es decir, del patrón de referencia más próximo por similitud combinada HET-CD. La fórmula de similitud combinada aplicada en este cálculo es: {escape(str(formula_txt))}.</p>
 <p><strong>Patrón K1:</strong> {escape(str(top[0].get('patron_id','') if top else ''))} · <strong>CD referencia K1:</strong> {escape(str(top[0].get('cd_referencia','') if top else ''))}</p>
 <p><strong>CD continuo Top-K:</strong> {escape(str(res.get('cd_continuo','')))}. Este valor se conserva solo como indicador auxiliar de tendencia; no sustituye al K1.</p>
 <p>Si el CD del K1 excede el rango normativo del grupo/subgrupo, se informa como contraste legal y el CD final queda limitado al intervalo aplicable.</p>
 </div>
-<h2>4. Similitudes</h2>
+<h2>5. Similitudes</h2>
 <div class="box">
 <p><strong>Similitud funcional:</strong> {escape(str(sims.get('funcional','')))}</p>
 <p><strong>Similitud factores CD:</strong> {escape(str(sims.get('factores_cd','')))}</p>
 <p><strong>Similitud combinada:</strong> {escape(str(sims.get('combinada','')))}</p>
 </div>
-<h2>5. Patrones de referencia más próximos</h2>
+<h2>6. Patrones de referencia más próximos</h2>
 <table><thead><tr><th>Patrón</th><th>Nombre</th><th>CD K1</th><th>CD aplicable</th><th>Validación normativa</th><th>Sim. funcional</th><th>Sim. factores CD</th><th>Sim. total</th></tr></thead><tbody>{top_rows}</tbody></table>
-<h2>6. Comparables internos y efecto arrastre</h2>
-<div class="box">
-<p><strong>Riesgo de arrastre:</strong> {escape(str(arr.get('riesgo_arrastre','')))}</p>
-<p>{escape(str(arr.get('observacion','')))}</p>
-</div>
-<table><thead><tr><th>Puesto comparable</th><th>CD vigente</th><th>Similitud</th><th>Riesgo</th></tr></thead><tbody>{comp_rows}</tbody></table>
-<h2>7. Fundamentación técnica</h2>
-<p>{escape(str(exp.get('resumen','')))}</p>
-<ul>{html_list(exp.get('motivos', []))}</ul>
-<h2>8. Trazabilidad de los datos seleccionados</h2>
+<h2>7. Comparables internos</h2>
+<p>Se muestran, en su caso, los puestos de la matriz interna con mayor similitud técnica, únicamente como referencia de coherencia comparativa.</p>
+<table><thead><tr><th>Puesto comparable</th><th>CD vigente</th><th>Similitud</th></tr></thead><tbody>{comp_rows}</tbody></table>
+{impacto_section}
+<h2>Trazabilidad de los datos seleccionados</h2>
 <p>Se incorporan las opciones seleccionadas o cargadas para permitir la revisión posterior de la entrada utilizada por el modelo.</p>
-<h3>8.1. Verbos funcionales seleccionados</h3>
+<h3>Verbos funcionales seleccionados</h3>
 <table><thead><tr><th>ID</th><th>Verbo</th><th>Grupo</th><th>Categoría</th><th>Definición</th></tr></thead><tbody>{verb_trace}</tbody></table>
-<h3>8.2. Factores HET-CD seleccionados</h3>
+<h3>Factores HET-CD seleccionados</h3>
 <table><thead><tr><th>Código</th><th>Criterio</th><th>Valor</th><th>Valor numérico</th><th>Criterio aplicado</th><th>Ejemplo</th></tr></thead><tbody>{factor_trace}</tbody></table>
-<h2>9. Advertencia jurídica</h2>
+<h2>Advertencia jurídica</h2>
 <p>El resultado tiene carácter técnico auxiliar y no sustituye el expediente administrativo de modificación de la RPT, que exigirá motivación, memoria económica, negociación cuando proceda, informes preceptivos y aprobación por el órgano competente.</p>
 </section>
 <div class="footer">Excmo. Ayuntamiento de Elche · Planificación de Recursos Humanos · HET-CD</div>
@@ -1203,7 +1261,7 @@ def render_cd_explanation(result: dict):
 
 
 def render_impacto_economico(result: dict):
-    """Módulo visible de impacto económico y riesgos asociados."""
+    """Módulo visible de impacto económico estimado."""
     ident = result.get("identificacion", {}) or {}
     res = result.get("resultado_cd", {}) or {}
     arr = result.get("efecto_arrastre", {}) or {}
@@ -1213,10 +1271,7 @@ def render_impacto_economico(result: dict):
     except Exception:
         diferencial_num = None
 
-    st.markdown("### Impacto económico y riesgos")
-    riesgo = arr.get("riesgo_arrastre", "NO_CALCULADO")
-    st.write(f"**Riesgo de arrastre:** {riesgo}")
-    st.caption(arr.get("observacion", ""))
+    st.markdown("### Impacto económico")
 
     if diferencial_num is None:
         render_notice("No puede calcularse impacto económico porque no hay diferencial de CD calculado.", "info")
@@ -1339,14 +1394,13 @@ def render_result(result: dict):
     else:
         render_notice("No se han obtenido patrones de referencia.", "warning")
 
-    st.markdown("### Comparables internos / efecto arrastre")
-    st.write(f"**Riesgo:** {arr.get('riesgo_arrastre')}")
+    st.markdown("### Comparables internos")
     st.caption(arr.get("observacion", ""))
     comp_df = pd.DataFrame(result.get("comparables_internos", []))
     if not comp_df.empty:
         st.dataframe(comp_df, use_container_width=True, hide_index=True)
     else:
-        render_notice("No hay comparables internos disponibles. En la plantilla actual `puestos_vector` está vacía, por lo que no se puede calcular arrastre real hasta cargar puestos existentes.", "info")
+        render_notice("No hay comparables internos disponibles. En la plantilla actual `puestos_vector` está vacía, por lo que no se puede calcular comparación interna hasta cargar puestos existentes.", "info")
 
     render_impacto_economico(result)
 
@@ -1436,7 +1490,7 @@ def aplicar_dotaciones_a_resumen(resumen_df: pd.DataFrame, dotaciones_df: pd.Dat
             out.at[idx, "dotaciones_afectadas_usuario"] = dots
             out.at[idx, "impacto_anual_total"] = round(unit * dots, 2)
             out.at[idx, "impacto_periodo"] = round(unit * dots * meses_num / 12.0, 2)
-            out.at[idx, "observacion_impacto"] = "Impacto recalculado con dotaciones afectadas introducidas en la app."
+            out.at[idx, "observacion_impacto"] = "Impacto calculado con las dotaciones efectivamente incluidas en la aplicación."
     return out
 
 
@@ -1534,26 +1588,100 @@ def build_global_html_report(analysis: dict, config_name: str) -> str:
             incidencia_normativa=("resultado_preliminar", lambda s: int((s == "INCIDENCIA_NORMATIVA").sum())),
             impacto_anual_total=("impacto_anual_total", "sum"),
         ).reset_index()
-        prior_mask = df.get("resultado_preliminar", pd.Series(dtype=str)).isin(["ANALIZAR_AL_ALZA", "REVISION_AGRUPADA", "INCIDENCIA_NORMATIVA"])
+        # Puestos de actuación prioritaria: solo se muestran los casos con incidencia real
+        # o conclusión técnica operativa. Los MANTENER y los CD coincidentes sin incidencia
+        # se excluyen para evitar ruido en el informe ejecutivo.
+        dif_series = pd.to_numeric(df.get("diferencial_cd", pd.Series(index=df.index, dtype=float)), errors="coerce")
+        resultado_series = df.get("resultado_preliminar", pd.Series(index=df.index, dtype=str)).astype(str)
+        k1_series = pd.to_numeric(df.get("cd_k1_orientativo", pd.Series(index=df.index, dtype=float)), errors="coerce")
+        final_series = pd.to_numeric(df.get("cd_final_ajustado", pd.Series(index=df.index, dtype=float)), errors="coerce")
+        ajuste_normativo_mask = k1_series.notna() & final_series.notna() & (k1_series.round(0) != final_series.round(0))
+        prior_mask = (dif_series.fillna(0) != 0) | (resultado_series == "INCIDENCIA_NORMATIVA") | ajuste_normativo_mask
         prioritarios = df[prior_mask].copy()
-        cols_decision = [c for c in ["id_het", "denominacion_normalizada", "grupo_subgrupo", "cd_vigente", "cd_final_ajustado", "diferencial_cd", "resultado_preliminar", "recomendacion"] if c in prioritarios.columns]
-        cols_tecnicos = [c for c in ["id_het", "denominacion_normalizada", "patron_k1", "nombre_patron_k1", "cd_k1_orientativo", "similitud_total_k1", "similitud_funcional_k1", "similitud_factores_cd_k1", "riesgo_arrastre"] if c in prioritarios.columns]
+
+        def _motivo_prioritario(row):
+            dif = _safe_num(row.get("diferencial_cd"))
+            cd_k1 = row.get("cd_k1_orientativo")
+            cd_final = row.get("cd_final_ajustado")
+            resultado = str(row.get("resultado_preliminar", ""))
+            try:
+                ajuste_legal = pd.notna(cd_k1) and pd.notna(cd_final) and int(round(float(cd_k1))) != int(round(float(cd_final)))
+            except Exception:
+                ajuste_legal = False
+            if resultado == "INCIDENCIA_NORMATIVA" or ajuste_legal:
+                return "Nivel técnico superior no aplicable por límite legal" if _safe_num(cd_k1) > _safe_num(cd_final) else "Incidencia normativa en el rango de CD"
+            if dif > 0:
+                return "Nivel técnico superior al CD actual"
+            if dif < 0:
+                return "Nivel técnico inferior al CD actual"
+            return "Incidencia técnica relevante"
+
+        def _conclusion_tecnica(row):
+            dif = _safe_num(row.get("diferencial_cd"))
+            cd_k1 = row.get("cd_k1_orientativo")
+            cd_final = row.get("cd_final_ajustado")
+            resultado = str(row.get("resultado_preliminar", ""))
+            try:
+                ajuste_legal = pd.notna(cd_k1) and pd.notna(cd_final) and int(round(float(cd_k1))) != int(round(float(cd_final)))
+            except Exception:
+                ajuste_legal = False
+            if resultado == "INCIDENCIA_NORMATIVA" or ajuste_legal:
+                return "No procede proponer la elevación del nivel de complemento de destino por superar el intervalo legal aplicable al subgrupo de clasificación."
+            if dif > 0:
+                return "Procede proponer la adecuación del puesto al nivel de complemento de destino resultante del análisis técnico."
+            if dif < 0:
+                return "No procede propuesta de incremento; el análisis técnico apunta a un nivel funcional inferior al actualmente asignado."
+            return "No procede actuación prioritaria sobre el nivel de complemento de destino."
+
+        if not prioritarios.empty:
+            prioritarios["motivo_inclusion"] = prioritarios.apply(_motivo_prioritario, axis=1)
+            prioritarios["conclusion_tecnica"] = prioritarios.apply(_conclusion_tecnica, axis=1)
+            cols_prioritarios = [c for c in ["id_het", "denominacion_normalizada", "grupo_subgrupo", "cd_vigente", "cd_k1_orientativo", "cd_final_ajustado", "diferencial_cd", "similitud_total_k1", "motivo_inclusion", "conclusion_tecnica"] if c in prioritarios.columns]
+            prioritarios_tabla = prioritarios[cols_prioritarios].rename(columns={
+                "id_het": "Código",
+                "denominacion_normalizada": "Puesto",
+                "grupo_subgrupo": "Subgrupo",
+                "cd_vigente": "CD actual",
+                "cd_k1_orientativo": "CD K1 orientativo",
+                "cd_final_ajustado": "CD final admisible",
+                "diferencial_cd": "Diferencia final",
+                "similitud_total_k1": "Similitud K1",
+                "motivo_inclusion": "Motivo de inclusión",
+                "conclusion_tecnica": "Conclusión técnica",
+            })
+        else:
+            prioritarios_tabla = pd.DataFrame()
+
         cols_econ = [c for c in ["id_het", "denominacion_normalizada", "diferencial_anual_por_dotacion", "dotaciones", "impacto_anual_total", "impacto_periodo", "observacion_impacto"] if c in prioritarios.columns]
+        prioritarios_econ = prioritarios[cols_econ].copy() if cols_econ else pd.DataFrame()
+        if not prioritarios_econ.empty and "impacto_anual_total" in prioritarios_econ.columns:
+            prioritarios_econ["impacto_anual_total"] = pd.to_numeric(prioritarios_econ["impacto_anual_total"], errors="coerce")
+            if "diferencial_anual_por_dotacion" in prioritarios_econ.columns:
+                prioritarios_econ["diferencial_anual_por_dotacion"] = pd.to_numeric(prioritarios_econ["diferencial_anual_por_dotacion"], errors="coerce")
+                prioritarios_econ = prioritarios_econ[prioritarios_econ["diferencial_anual_por_dotacion"] > 0].copy()
+            else:
+                prioritarios_econ = prioritarios_econ[prioritarios_econ["impacto_anual_total"].notna()].copy()
+            prioritarios_econ = prioritarios_econ.rename(columns={
+                "id_het": "Código",
+                "denominacion_normalizada": "Puesto",
+                "diferencial_anual_por_dotacion": "Diferencial anual por dotación",
+                "dotaciones": "Dotaciones",
+                "impacto_anual_total": "Impacto anual total",
+                "impacto_periodo": "Impacto periodo",
+                "observacion_impacto": "Observación impacto",
+            })
         cols_sim_all = [c for c in ["id_het", "denominacion_normalizada", "grupo_subgrupo", "cd_vigente", "patron_k1", "nombre_patron_k1", "cd_k1_orientativo", "similitud_total_k1", "similitud_funcional_k1", "similitud_factores_cd_k1", "resultado_preliminar"] if c in df.columns]
-        prioritarios_decision = prioritarios[cols_decision] if cols_decision else pd.DataFrame()
-        prioritarios_tecnicos = prioritarios[cols_tecnicos] if cols_tecnicos else pd.DataFrame()
-        prioritarios_econ = prioritarios[cols_econ] if cols_econ else pd.DataFrame()
         similitudes_globales = df[cols_sim_all] if cols_sim_all else pd.DataFrame()
         total_alza = int((df["resultado_preliminar"] == "ANALIZAR_AL_ALZA").sum()) if "resultado_preliminar" in df.columns else 0
         total_agr = int((df["resultado_preliminar"] == "REVISION_AGRUPADA").sum()) if "resultado_preliminar" in df.columns else 0
         total_inc = int((df["resultado_preliminar"] == "INCIDENCIA_NORMATIVA").sum()) if "resultado_preliminar" in df.columns else 0
     else:
-        por_grupo = pd.DataFrame(); prioritarios_decision = pd.DataFrame(); prioritarios_tecnicos = pd.DataFrame(); prioritarios_econ = pd.DataFrame(); similitudes_globales = pd.DataFrame()
+        por_grupo = pd.DataFrame(); prioritarios_tabla = pd.DataFrame(); prioritarios_econ = pd.DataFrame(); similitudes_globales = pd.DataFrame()
         total_alza = total_agr = total_inc = 0
 
     impacto_anual = _fmt_cell(agregado.get('impacto_anual_total', ''), 'impacto_anual_total')
     impacto_periodo = _fmt_cell(agregado.get('impacto_periodo_total', ''), 'impacto_periodo_total')
-    dot_txt = "con las dotaciones afectadas introducidas en la app" if agregado.get("impacto_con_dotaciones_usuario") else "por una dotación cuando no se hayan introducido dotaciones afectadas"
+    dot_txt = "conforme a las dotaciones efectivamente incluidas en la aplicación para cada puesto tipo"
 
     return f"""
 <!DOCTYPE html>
@@ -1582,7 +1710,7 @@ th {{ background:#eef1f3; color:rgb(11,16,29); }}
 </section><section class="content">
 <h2>1. Objeto y alcance</h2>
 <p>El presente documento sintetiza la evaluación sistemática de los puestos tipo incluidos en la matriz <code>puestos_vector</code> mediante la metodología HET-CD. El análisis compara la configuración funcional y los factores de complemento de destino de cada puesto con los patrones activos y validados del modelo, contrasta el resultado con el rango legal del grupo/subgrupo y clasifica la actuación técnica preliminar.</p>
-<p>El análisis se formula sobre <strong>puestos tipo</strong>. Por ello, la valoración técnica no depende del número de dotaciones existentes. En cambio, el impacto económico sí depende de las dotaciones afectadas y se calcula posteriormente, {escape(dot_txt)}.</p>
+<p>El análisis se formula sobre <strong>puestos tipo</strong>. Por ello, la valoración técnica no depende del número de dotaciones existentes. En cambio, el impacto económico se calcula sobre las dotaciones efectivamente incluidas en la aplicación para cada puesto tipo, con independencia de que dichas dotaciones se encuentren ocupadas o vacantes en el momento del análisis.</p>
 <h2>2. Resumen ejecutivo</h2>
 <div class="box">
 <p><strong>Puestos analizados:</strong> {escape(str(agregado.get('puestos_analizados','')))}</p>
@@ -1591,9 +1719,9 @@ th {{ background:#eef1f3; color:rgb(11,16,29); }}
 <p><strong>Impacto periodo ({escape(str(agregado.get('meses','')))} meses):</strong> {impacto_periodo} €</p>
 <p class="small">El impacto económico se limita al diferencial de complemento de destino. No incluye trienios, productividad, gratificaciones, Seguridad Social u otros conceptos retributivos.</p>
 </div>
-<p>Los resultados no constituyen una modificación automática de la RPT. Su finalidad es ordenar técnicamente los casos, identificar incoherencias o familias funcionales que requieran revisión y facilitar la preparación de los informes y expedientes que procedan.</p>
+<p>Los resultados no constituyen una modificación automática de la RPT. Su finalidad es ordenar técnicamente los casos, formular una conclusión técnica sobre la procedencia o improcedencia de adecuación del CD y facilitar la preparación de los informes y expedientes que procedan.</p>
 <h2>3. Distribución por resultado preliminar</h2>
-<p>La siguiente tabla resume la clasificación preliminar obtenida. La categoría “mantener” indica coherencia entre el CD vigente y el CD final jurídicamente admisible; las categorías de revisión identifican puestos que requieren contraste técnico adicional antes de cualquier propuesta formal.</p>
+<p>La siguiente tabla resume la clasificación preliminar obtenida. La categoría “mantener” indica coherencia entre el CD vigente y el CD final jurídicamente admisible; el resto de categorías identifica puestos con conclusión técnica específica sobre la adecuación, improcedencia o limitación normativa del nivel.</p>
 {table_from_df(resumen_resultados)}
 <h2>4. Resumen por grupo/subgrupo</h2>
 <p>Este resumen permite detectar si las posibles revisiones se concentran en determinados grupos/subgrupos o si responden a familias funcionales concretas. La lectura debe realizarse junto con el detalle técnico de cada puesto.</p>
@@ -1601,21 +1729,17 @@ th {{ background:#eef1f3; color:rgb(11,16,29); }}
 <h2>5. Similitud técnica del conjunto de puestos</h2>
 <p>La tabla siguiente muestra, para cada puesto analizado, el patrón K1 más próximo y las similitudes funcional, de factores CD y combinada. Estos datos permiten revisar la robustez del encaje técnico antes de entrar en las propuestas o incidencias concretas.</p>
 {table_from_df(similitudes_globales, max_rows=300)}
-<h2>6. Puestos con actuación prioritaria</h2>
-<p>Se relacionan los puestos que no han quedado clasificados como mantenimiento simple. Para evitar tablas desbordadas en A4, la información se divide en tres bloques: decisión, justificación técnica e impacto económico.</p>
-<h3>5.1. Resumen decisional</h3>
-{table_from_df(prioritarios_decision, max_rows=250)}
-<h3>5.2. Justificación técnica resumida</h3>
-{table_from_df(prioritarios_tecnicos, max_rows=250)}
-<h3>5.3. Impacto económico y dotaciones</h3>
+<h2>6. Puestos de actuación prioritaria</h2>
+<p>Se incluyen en este apartado los puestos en los que el análisis técnico evidencia una diferencia relevante entre el nivel de complemento de destino actualmente asignado y el nivel resultante de la comparación funcional con los puestos patrón, así como aquellos supuestos en los que concurren límites legales o incidencias técnicas que condicionan la propuesta de adecuación.</p>
+<p>La conclusión técnica se formula en términos de procedencia o improcedencia de adecuación del nivel de complemento de destino, sin perjuicio de la tramitación administrativa que, en su caso, resulte exigible para la modificación de la Relación de Puestos de Trabajo.</p>
+{table_from_df(prioritarios_tabla, max_rows=250)}
+<h2>7. Estimación económica de las actuaciones propuestas</h2>
+<p>La estimación económica se realiza exclusivamente respecto de aquellos puestos para los que existen datos suficientes de dotaciones y diferencia retributiva asociada al nivel de complemento de destino.</p>
 {table_from_df(prioritarios_econ, max_rows=250)}
-<h2>7. Cautelas metodológicas</h2>
+<h2>8. Cautelas metodológicas</h2>
 <ul>
 <li>Solo intervienen en el cálculo los patrones activos y validados mediante la columna <code>activo_calculo</code>.</li>
 <li>El resultado técnico bruto se basa en el patrón K1 activo más similar. El rango legal del grupo/subgrupo se aplica como restricción posterior para obtener el CD final jurídicamente admisible.</li>
-<li>Cuando no existe incremento recomendado de CD, los puestos similares se interpretan como comparables internos de coherencia, no como arrastre activo.</li>
-<li>El efecto arrastre debe entenderse como alerta de coherencia interna y eventual necesidad de revisión agrupada, no como decisión automática.</li>
-<li>Los puestos con revisión manual pendiente deben validarse antes de incorporarse al expediente definitivo.</li>
 </ul>
 </section><div class="footer">HET-CD · Ayuntamiento de Elche · Documento técnico auxiliar</div></div></body></html>
 """
@@ -1970,7 +2094,7 @@ elif page == "Evaluador HET-CD":
 
     if puestos.empty:
         render_notice("La hoja `puestos_vector` está vacía. Por eso el evaluador de puestos existentes no muestra registros reales de la RPT.", "warning")
-        render_notice("Puedes usar el último caso preparado en el configurador como caso de prueba, o cargar una matriz `puestos_vector` con puestos tipo reales para activar el evaluador y el arrastre interno.", "info")
+        render_notice("Puedes usar el último caso preparado en el configurador como caso de prueba, o cargar una matriz `puestos_vector` con puestos tipo reales para activar el evaluador y el comparación interna.", "info")
         caso = st.session_state.get("last_configured_puesto_row")
         if caso:
             with st.expander("Usar último caso configurado como caso de prueba", expanded=True):
@@ -2161,7 +2285,7 @@ elif page == "Análisis RPT completo":
                         "id_het", "denominacion_normalizada", "grupo_subgrupo", "cd_vigente",
                         "cd_k1_orientativo", "cd_final_ajustado", "diferencial_cd", "sentido_revision",
                         "resultado_preliminar", "recomendacion", "patron_k1", "nombre_patron_k1",
-                        "similitud_total_k1", "riesgo_arrastre"
+                        "similitud_total_k1"
                     ] if c in revisiones_df.columns]
                     display_rev_df = revisiones_df[rev_cols].copy()
                     for _c in ["similitud_total_k1"]:
@@ -2185,7 +2309,6 @@ elif page == "Análisis RPT completo":
                             "patron_k1": st.column_config.TextColumn("Patrón K1"),
                             "nombre_patron_k1": st.column_config.TextColumn("Nombre patrón K1", width="medium"),
                             "similitud_total_k1": st.column_config.NumberColumn("Similitud K1", format="%.4f"),
-                            "riesgo_arrastre": st.column_config.TextColumn("Arrastre"),
                         },
                     )
 
@@ -2219,7 +2342,7 @@ elif page == "Análisis RPT completo":
                 st.markdown("### Tabla completa de resultados sistemáticos")
                 view_cols = [c for c in [
                     "id_het", "denominacion_normalizada", "grupo_subgrupo", "cd_vigente", "cd_k1_orientativo",
-                    "cd_final_ajustado", "diferencial_cd", "resultado_preliminar", "recomendacion", "riesgo_arrastre",
+                    "cd_final_ajustado", "diferencial_cd", "resultado_preliminar", "recomendacion",
                     "diferencial_anual_por_dotacion", "dotaciones", "impacto_anual_total"
                 ] if c in resumen_df.columns]
                 display_resumen_df = resumen_df[view_cols].copy()
@@ -2228,7 +2351,7 @@ elif page == "Análisis RPT completo":
                         display_resumen_df[_c] = pd.to_numeric(display_resumen_df[_c], errors="coerce").round(2)
                 st.dataframe(display_resumen_df, use_container_width=True, hide_index=True)
 
-                st.markdown("### Impacto económico de acciones recomendadas")
+                st.markdown("### Impacto económico de actuaciones propuestas")
                 st.caption(
                     "Este bloque se limita a las revisiones con diferencial positivo de CD, porque son las que generan coste presupuestario. "
                     "Las revisiones a la baja se mantienen en la tabla anterior como señal técnica, no como reducción automática."
@@ -2281,7 +2404,7 @@ elif page == "Análisis RPT completo":
                         if _c in display_econ_df.columns:
                             display_econ_df[_c] = pd.to_numeric(display_econ_df[_c], errors="coerce").round(2)
                     st.dataframe(display_econ_df, use_container_width=True, hide_index=True)
-                    render_notice("El impacto económico de las descargas se actualizará con estas dotaciones afectadas.", "success")
+                    render_notice("El impacto económico de las descargas se actualizará con las dotaciones efectivamente incluidas en la aplicación.", "success")
                 else:
                     render_notice("No hay puestos tipo con incremento positivo de CD o no existe diferencial económico calculable. No se solicitan dotaciones afectadas.", "info")
 
@@ -2308,7 +2431,7 @@ elif page == "Análisis RPT completo":
 
                 parametros_df = pd.DataFrame([agregado])
                 if agregado.get("impacto_con_dotaciones_usuario"):
-                    parametros_df["nota_impacto"] = "Impacto recalculado con dotaciones afectadas introducidas en la app."
+                    parametros_df["nota_impacto"] = "Impacto calculado con las dotaciones efectivamente incluidas en la aplicación."
                 xlsx_bytes = dataframe_to_xlsx_bytes({
                     "resultados_revision_cd_rpt": resumen_df,
                     "distribucion_resultados": dist,

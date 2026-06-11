@@ -1495,8 +1495,9 @@ def determinar_resultado_preliminar(
         return "INCIDENCIA_NORMATIVA"
     if diferencial_cd is None:
         return "SIN_DATOS_SUFICIENTES"
-    if efecto_arrastre and efecto_arrastre.get("riesgo_arrastre") in {"MUY_ALTO", "ALTO"} and diferencial_cd != 0:
-        return "REVISION_AGRUPADA"
+    # Los comparables internos no alteran por sí solos la conclusión técnica.
+    # La conclusión se determina por la diferencia entre CD vigente y CD final admisible;
+    # los comparables se mantienen solo como información auxiliar de coherencia interna.
     if differential_is_zero(diferencial_cd):
         return "MANTENER"
     if diferencial_cd > 0:
@@ -1915,11 +1916,6 @@ def generar_texto_recomendacion(result: Dict[str, Any]) -> Dict[str, str]:
             f" El patrón K1 apunta a CD {cd_k1}; el rango legal configurado para el grupo/subgrupo es "
             f"{val.get('cd_min')} - {val.get('cd_max')}. Por ello, el valor K1 se conserva como diagnóstico técnico bruto y la recomendación final se limita al intervalo legal aplicable."
         )
-
-    if riesgo in {"MUY_ALTO", "ALTO"} and dif_i is not None and dif_i > 0:
-        texto += " El riesgo de arrastre interno aconseja abordar la revisión de forma agrupada con los puestos de alta similitud."
-    elif riesgo in {"MUY_ALTO", "ALTO"} and dif_i == 0:
-        texto += " Los puestos de alta similitud se muestran como comparables internos de coherencia, no como arrastre activo, al no existir propuesta de modificación del CD."
 
     return {"titulo": titulo, "texto": texto}
 
